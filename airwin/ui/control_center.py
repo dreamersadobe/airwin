@@ -1,4 +1,4 @@
-"""macOS Big Sur / Sonoma style Control Center flyout window for AirPods management."""
+"""Windows 11 Quick Settings style flyout window for AirPods management."""
 
 import sys
 from typing import Optional
@@ -7,12 +7,11 @@ from airwin.config import AppConfig
 from airwin.core.device_manager import DeviceManager
 from airwin.core.models import AirPodsState, NoiseControlMode
 from airwin.core.windows_audio import AudioController
-from airwin.ui.components import BatteryCardWidget, NoiseSegmentedControl
+from airwin.ui.components import BatteryCardWidget, FluentToggleSwitch, NoiseSegmentedControl
 from airwin.ui.dwm import enable_dwm_transparency
 from airwin.ui.qt_compat import (
     QtCore,
     QApplication,
-    QCheckBox,
     QColor,
     QDialog,
     QFrame,
@@ -32,7 +31,7 @@ from airwin.utils.autostart import set_launch_on_startup
 
 
 class ControlCenterFlyout(QDialog):
-    """The macOS-style flyout menu opened when clicking the tray icon."""
+    """Windows 11 Quick Settings style flyout opened when clicking the tray icon."""
 
     def __init__(self, device_manager: DeviceManager, config: AppConfig, parent=None):
         super().__init__(parent)
@@ -74,7 +73,7 @@ class ControlCenterFlyout(QDialog):
 
         self.btn_close = QPushButton("✕", self)
         self.btn_close.setObjectName("CloseToolButton")
-        self.btn_close.setFixedSize(24, 24)
+        self.btn_close.setFixedSize(26, 26)
         self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_close.clicked.connect(self.hide)
         header_layout.addWidget(self.btn_close)
@@ -100,8 +99,8 @@ class ControlCenterFlyout(QDialog):
         anc_section = QFrame(self)
         anc_section.setObjectName("SectionCard")
         anc_layout = QVBoxLayout(anc_section)
-        anc_layout.setContentsMargins(12, 10, 12, 10)
-        anc_layout.setSpacing(8)
+        anc_layout.setContentsMargins(10, 8, 10, 8)
+        anc_layout.setSpacing(6)
 
         lbl_anc_title = QLabel("Управление шумом", self)
         lbl_anc_title.setObjectName("SectionTitle")
@@ -113,36 +112,32 @@ class ControlCenterFlyout(QDialog):
 
         layout.addWidget(anc_section)
 
-        # 4. Settings & Features Section
+        # 4. Settings Section with Native Windows 11 Toggle Switches
         settings_section = QFrame(self)
         settings_section.setObjectName("SectionCard")
         settings_layout = QVBoxLayout(settings_section)
         settings_layout.setContentsMargins(12, 10, 12, 10)
-        settings_layout.setSpacing(8)
+        settings_layout.setSpacing(6)
 
-        lbl_settings_title = QLabel("Настройки и функции", self)
+        lbl_settings_title = QLabel("Параметры", self)
         lbl_settings_title.setObjectName("SectionTitle")
         settings_layout.addWidget(lbl_settings_title)
 
-        self.cb_autopause = QCheckBox("Автопауза при снятии наушника", self)
-        self.cb_autopause.setChecked(self.config.auto_pause_enabled)
-        self.cb_autopause.toggled.connect(self.on_autopause_toggled)
-        settings_layout.addWidget(self.cb_autopause)
+        self.sw_autopause = FluentToggleSwitch("Автопауза при снятии наушника", self.config.auto_pause_enabled, self)
+        self.sw_autopause.toggled.connect(self.on_autopause_toggled)
+        settings_layout.addWidget(self.sw_autopause)
 
-        self.cb_popup = QCheckBox("Всплывающее окно при открытии кейса", self)
-        self.cb_popup.setChecked(self.config.popup_on_case_open)
-        self.cb_popup.toggled.connect(self.on_popup_toggled)
-        settings_layout.addWidget(self.cb_popup)
+        self.sw_popup = FluentToggleSwitch("Всплывающее окно при открытии кейса", self.config.popup_on_case_open, self)
+        self.sw_popup.toggled.connect(self.on_popup_toggled)
+        settings_layout.addWidget(self.sw_popup)
 
-        self.cb_autostart = QCheckBox("Запуск вместе с Windows", self)
-        self.cb_autostart.setChecked(self.config.launch_on_startup)
-        self.cb_autostart.toggled.connect(self.on_autostart_toggled)
-        settings_layout.addWidget(self.cb_autostart)
+        self.sw_autostart = FluentToggleSwitch("Запуск вместе с Windows", self.config.launch_on_startup, self)
+        self.sw_autostart.toggled.connect(self.on_autostart_toggled)
+        settings_layout.addWidget(self.sw_autostart)
 
-        self.cb_demo = QCheckBox("Режим демонстрации (Тест)", self)
-        self.cb_demo.setChecked(self.config.demo_mode)
-        self.cb_demo.toggled.connect(self.on_demo_toggled)
-        settings_layout.addWidget(self.cb_demo)
+        self.sw_demo = FluentToggleSwitch("Режим демонстрации (Тест)", self.config.demo_mode, self)
+        self.sw_demo.toggled.connect(self.on_demo_toggled)
+        settings_layout.addWidget(self.sw_demo)
 
         layout.addWidget(settings_section)
 
@@ -164,22 +159,22 @@ class ControlCenterFlyout(QDialog):
         btn_row.addWidget(self.btn_exit)
         layout.addLayout(btn_row)
 
-        self.setFixedSize(350, 470)
+        self.setFixedSize(350, 480)
 
     def paintEvent(self, event):
-        """Draws clean macOS Big Sur dark glass card background."""
+        """Draws clean Windows 11 Fluent dark Acrylic background."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         path = QPainterPath()
-        path.addRoundedRect(rect, 20, 20)
+        path.addRoundedRect(rect, 12, 12)
 
-        # Rich dark slate
-        painter.fillPath(path, QColor(28, 30, 34, 252))
+        # Windows 11 Dark Acrylic
+        painter.fillPath(path, QColor(32, 32, 32, 248))
 
-        # Subtle glass border
-        painter.setPen(QPen(QColor(255, 255, 255, 36), 1.2))
+        # Windows 11 1px border
+        painter.setPen(QPen(QColor(255, 255, 255, 26), 1))
         painter.drawPath(path)
 
     def showEvent(self, event):
@@ -195,9 +190,9 @@ class ControlCenterFlyout(QDialog):
     def update_state(self, state: AirPodsState):
         """Refreshes the UI with the latest AirPodsState."""
         self.lbl_device_name.setText(state.device_name)
-        status_txt = "Подключено" if state.connected else "Не подключено"
+        status_txt = "● Подключено" if state.connected else "● Не подключено"
         if state.connected and state.rssi != -100:
-            status_txt += f" • {state.rssi} dBm"
+            status_txt += f"  ({state.rssi} dBm)"
         self.lbl_status.setText(status_txt)
 
         self.card_left.setData(state.left_battery, state.left_charging, state.left_in_ear)
