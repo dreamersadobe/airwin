@@ -1,0 +1,68 @@
+name: Build and Release AirWin
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Standalone AirWin.exe (Single File)
+        run: |
+          pyinstaller --noconfirm --clean --windowed --onefile --name AirWin --add-data "airwin;airwin" airwin/main.py
+
+      - name: Build AirWin Folder Distribution
+        run: |
+          pyinstaller --noconfirm --clean --windowed --onedir --name AirWin-Folder --add-data "airwin;airwin" airwin/main.py
+          Compress-Archive -Path dist/AirWin-Folder/* -DestinationPath dist/AirWin-Windows-x64.zip
+
+      - name: Create GitHub Release and Upload Exe
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: AirWin ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          body: |
+            ### 🎧 AirWin Release ${{ github.ref_name }}
+            
+            macOS-like AirPods Manager for Windows.
+            
+            #### 📦 Загрузки:
+            * **`AirWin.exe`** — автономный исполняемый файл (портативная версия, запуск в один клик).
+            * **`AirWin-Windows-x64.zip`** — полная папка программы в архиве.
+            
+            #### ✨ Возможности:
+            * 🔋 Раздельный мониторинг заряда (L/R/Case) прямо из Bluetooth Low Energy маяков Apple.
+            * 🎧 Анимированное всплывающее окно при открытии кейса.
+            * 🎛️ Центр управления в стиле macOS Sonoma / Big Sur из системного трея.
+            * 🔇 Переключение режимов шумоподавления (ANC / Прозрачность / Выкл).
+            * 👂 Автопауза при извлечении наушника из уха.
+            * 🎵 Автоматический фикс качества звука Windows (Hands-Free fix).
+          files: |
+            dist/AirWin.exe
+            dist/AirWin-Windows-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
