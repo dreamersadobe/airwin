@@ -2,3 +2,6 @@
 PySide6>=6.5.0
 bleak>=0.21.0
 pyinstaller>=6.0.0
+winrt-Windows.Devices.Bluetooth>=4.0.0
+winrt-Windows.Devices.Bluetooth.Rfcomm>=4.0.0
+winrt-Windows.Devices.Enumeration>=4.0.0

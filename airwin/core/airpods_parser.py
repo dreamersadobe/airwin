@@ -5,7 +5,7 @@ and Nearby Info (type 0x10) packets for AirPods and Beats devices.
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 from airwin.core.models import AirPodsModel, AirPodsState, NoiseControlMode
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,10 @@ MODEL_MAP = {
     (0x02, 0x20): AirPodsModel.AIRPODS_1,
     (0x0F, 0x20): AirPodsModel.AIRPODS_2,
     (0x13, 0x20): AirPodsModel.AIRPODS_3,
+    (0x1B, 0x20): AirPodsModel.AIRPODS_4_ANC,
+    (0x1C, 0x20): AirPodsModel.AIRPODS_4,
+    (0x20, 0x1B): AirPodsModel.AIRPODS_4_ANC,
+    (0x06, 0x73): AirPodsModel.AIRPODS_4_ANC,  # Modern truncated 17-byte Proximity beacon
     (0x0E, 0x20): AirPodsModel.AIRPODS_PRO,
     (0x14, 0x20): AirPodsModel.AIRPODS_PRO_2,
     (0x24, 0x20): AirPodsModel.AIRPODS_PRO_2,
@@ -32,12 +36,33 @@ MODEL_MAP = {
 def _raw_nibble_to_percent(nibble: int) -> int:
     """Converts AirPods 4-bit battery nibble (0-10) to percentage (0-100%).
 
-    A value of 15 (0xF) indicates the part is disconnected / not available.
+    Values above 10 (e.g. 0xF=15 or 0xC=12) indicate disconnected/unavailable.
     """
     if 0 <= nibble <= 10:
-        # 10 is 100%, 9 is 90%, etc.
         return nibble * 10
     return -1
+
+
+def extract_tlvs(raw_data: bytes) -> List[Tuple[int, bytes]]:
+    """Extracts Apple Continuity Type-Length-Value records from manufacturer data.
+
+    Returns a list of (type, chunk_bytes_with_header).
+    """
+    tlvs = []
+    offset = 0
+    while offset + 1 < len(raw_data):
+        rec_type = raw_data[offset]
+        rec_len = raw_data[offset + 1]
+        chunk_len = 2 + rec_len
+        if offset + chunk_len <= len(raw_data):
+            tlvs.append((rec_type, raw_data[offset : offset + chunk_len]))
+            offset += chunk_len
+        else:
+            # Fallback if raw packet is not structured with TLV header but matches direct 0x07
+            if rec_type == 0x07 and len(raw_data) >= 9:
+                tlvs.append((0x07, raw_data))
+            break
+    return tlvs
 
 
 class AirPodsParser:
@@ -50,22 +75,36 @@ class AirPodsParser:
         device_name: Optional[str] = None,
         mac_address: Optional[str] = None,
     ) -> Optional[AirPodsState]:
-        """Parses raw Apple BLE manufacturer specific data into an AirPodsState object.
+        """Parses Apple BLE manufacturer data into an AirPodsState object.
 
-        Returns None if data is not an AirPods packet.
+        Handles multi-TLV payloads containing Proximity Pairing (0x07) or Nearby Info (0x10).
         """
         if not raw_data or len(raw_data) < 7:
             return None
 
-        # Check packet type
-        packet_type = raw_data[0]
+        tlvs = extract_tlvs(raw_data)
 
-        # 0x07 = Proximity Pairing (Most detailed packet: battery L/R/Case, in-ear, model)
-        if packet_type == 0x07:
-            return AirPodsParser._parse_proximity_pairing(raw_data, rssi, device_name, mac_address)
+        # 1. Look for Proximity Pairing (0x07)
+        for rec_type, chunk in tlvs:
+            if rec_type == 0x07:
+                state = AirPodsParser._parse_proximity_pairing(chunk, rssi, device_name, mac_address)
+                if state:
+                    return state
 
-        # 0x10 = Nearby Action / Status packet
-        if packet_type == 0x10 and len(raw_data) >= 8:
+        # 2. Direct 0x07 fallback if not caught by TLV loop
+        if raw_data[0] == 0x07 and len(raw_data) >= 9:
+            state = AirPodsParser._parse_proximity_pairing(raw_data, rssi, device_name, mac_address)
+            if state:
+                return state
+
+        # 3. Look for Nearby Action / Status packet (0x10)
+        for rec_type, chunk in tlvs:
+            if rec_type == 0x10 and len(chunk) >= 8:
+                state = AirPodsParser._parse_nearby_action(chunk, rssi, device_name, mac_address)
+                if state:
+                    return state
+
+        if raw_data[0] == 0x10 and len(raw_data) >= 8:
             return AirPodsParser._parse_nearby_action(raw_data, rssi, device_name, mac_address)
 
         return None
@@ -79,12 +118,12 @@ class AirPodsParser:
     ) -> Optional[AirPodsState]:
         """Parses Apple Proximity Pairing (type 0x07) beacon.
 
-        Structure (typical 27 bytes):
+        Structure (27 bytes unencrypted, or 19 bytes encrypted/compact):
         [0]: 0x07 (Type)
-        [1]: 0x19 (Length, 25 bytes payload)
-        [2..3]: Device Model ID (e.g. 0x0e 0x20 -> AirPods Pro)
+        [1]: Length (0x19 or 0x11)
+        [2..3]: Device Model ID
         [4]: Status flags
-        [5]: Flip / Ear status
+        [5]: Flip & in-ear presence
         [6]: Left & Right battery nibbles
         [7]: Case battery nibble & lid status
         [8]: Charging flags
@@ -93,10 +132,9 @@ class AirPodsParser:
             return None
 
         # 1. Device Model
-        model_key = (data[2], data[3]) if len(data) > 3 else (0x0E, 0x20)
+        model_key = (data[2], data[3])
         model = MODEL_MAP.get(model_key, AirPodsModel.UNKNOWN)
 
-        # If unknown, try guessing based on byte 3 or device_name
         if model == AirPodsModel.UNKNOWN:
             if device_name:
                 name_lower = device_name.lower()
@@ -106,28 +144,29 @@ class AirPodsParser:
                     model = AirPodsModel.AIRPODS_PRO
                 elif "max" in name_lower:
                     model = AirPodsModel.AIRPODS_MAX
+                elif "4" in name_lower or "utopia" in name_lower:
+                    model = AirPodsModel.AIRPODS_4_ANC
+                elif "3" in name_lower:
+                    model = AirPodsModel.AIRPODS_3
                 elif "beats" in name_lower:
                     model = AirPodsModel.BEATS_FIT_PRO
                 else:
                     model = AirPodsModel.AIRPODS_2
             else:
-                model = AirPodsModel.AIRPODS_PRO
+                model = AirPodsModel.AIRPODS_4_ANC
 
-        # 2. Left / Right Flip Bit
-        # Apple swaps earbud channels dynamically; bit 5 in byte 5 indicates inversion
-        flip = bool((data[5] >> 5) & 0x01) if len(data) > 5 else False
+        # 2. Left / Right Flip Bit (Apple swaps earbud channels dynamically)
+        flip = bool((data[5] >> 5) & 0x01)
 
         # 3. Battery Levels (Nibbles)
-        # Byte 6 contains earbud 1 and earbud 2
         raw_b1 = data[6] & 0x0F
         raw_b2 = (data[6] >> 4) & 0x0F
-        raw_case = data[7] & 0x0F if len(data) > 7 else 0x0F
+        raw_case = data[7] & 0x0F
 
         pct_1 = _raw_nibble_to_percent(raw_b1)
         pct_2 = _raw_nibble_to_percent(raw_b2)
         pct_case = _raw_nibble_to_percent(raw_case)
 
-        # Assign to Left / Right based on flip flag
         if flip:
             left_battery = pct_2
             right_battery = pct_1
@@ -140,42 +179,37 @@ class AirPodsParser:
         right_charging = False
         case_charging = False
 
-        if len(data) > 8:
-            charge_byte = data[8]
-            chg_1 = bool(charge_byte & 0x01)
-            chg_2 = bool(charge_byte & 0x02)
-            case_charging = bool(charge_byte & 0x04)
+        charge_byte = data[8]
+        chg_1 = bool(charge_byte & 0x01)
+        chg_2 = bool(charge_byte & 0x02)
+        case_charging = bool(charge_byte & 0x04)
 
-            if flip:
-                left_charging = chg_2
-                right_charging = chg_1
-            else:
-                left_charging = chg_1
-                right_charging = chg_2
+        if flip:
+            left_charging = chg_2
+            right_charging = chg_1
+        else:
+            left_charging = chg_1
+            right_charging = chg_2
 
         # 5. In-Ear Detection (Byte 5 flags)
-        left_in_ear = False
-        right_in_ear = False
+        in_ear_1 = bool((data[5] & 0x08) != 0)
+        in_ear_2 = bool((data[5] & 0x04) != 0)
+
+        if flip:
+            left_in_ear = in_ear_2
+            right_in_ear = in_ear_1
+        else:
+            left_in_ear = in_ear_1
+            right_in_ear = in_ear_2
+
+        # Lid status:
+        # Case is open if case battery is actively reported, or charging flags are active,
+        # or if neither or only one earbud is in-ear while case is reporting.
         case_open = True
+        if left_in_ear and right_in_ear and pct_case < 0:
+            case_open = False
 
-        if len(data) > 5:
-            # When earbuds are in ear, charging is False and battery is valid
-            # Status bits in byte 5 / 7 indicate lid and ear presence
-            in_ear_1 = bool((data[5] & 0x08) != 0)
-            in_ear_2 = bool((data[5] & 0x04) != 0)
-
-            if flip:
-                left_in_ear = in_ear_2
-                right_in_ear = in_ear_1
-            else:
-                left_in_ear = in_ear_1
-                right_in_ear = in_ear_2
-
-            # If both earbuds are in ear, case is typically closed
-            if left_in_ear and right_in_ear:
-                case_open = False
-
-        # If battery is unknown for all 3 components, this isn't a valid reading
+        # If all battery readings are completely invalid, drop packet
         if left_battery < 0 and right_battery < 0 and pct_case < 0:
             return None
 
@@ -207,11 +241,9 @@ class AirPodsParser:
         mac_address: Optional[str],
     ) -> Optional[AirPodsState]:
         """Parses Apple Nearby Action (type 0x10) packet for supplementary battery/state."""
-        # Typically shorter, provides activity state or battery level summary
         if len(data) < 6:
             return None
 
-        # Byte 3 or 4 can contain overall battery level
         raw_bat = (data[4] & 0x7F) if len(data) > 4 else -1
         bat = raw_bat if 0 <= raw_bat <= 100 else -1
 

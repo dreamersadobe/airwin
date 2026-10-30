@@ -34,19 +34,8 @@ class AudioController:
                 logger.error(f"Failed to send Windows media key: {e}")
                 return False
         elif sys.platform == "darwin":
-            # macOS testing fallback
             try:
-                script = """
-                tell application "System Events"
-                    key code 16 using {command down}
-                end tell
-                """
-                # Or Spotify / Music check
-                cmd = [
-                    "osascript",
-                    "-e",
-                    'tell application "Music" to playpause',
-                ]
+                cmd = ["osascript", "-e", 'tell application "Music" to playpause']
                 subprocess.run(cmd, capture_output=True, timeout=1)
                 return True
             except Exception:
@@ -71,7 +60,7 @@ class AudioController:
         self._is_paused_by_airwin = False
 
     @staticmethod
-    def fix_handsfree_audio() -> tuple[bool, str]:
+    def fix_handsfree_audio(device_name: str = "") -> tuple[bool, str]:
         """Disables Windows Bluetooth Hands-Free Telephony service for AirPods.
 
         Prevents audio quality from dropping to muffled 8kHz mono when apps query mic.
@@ -80,22 +69,31 @@ class AudioController:
             return False, "Функция доступна только в Windows"
 
         try:
-            # PowerShell command to disable Hands-Free Telephony audio device
+            # Match any Hands-Free endpoint related to Apple or specific device
+            patterns = ["*Hands-Free*"]
+            if device_name:
+                clean_name = device_name.replace("'", "").replace('"', "")
+                name_filter = f"($_.FriendlyName -like '*{clean_name}*') -and "
+            else:
+                name_filter = ""
+
             ps_cmd = (
-                'Get-PnpDevice -Class "AudioEndpoint" | '
-                'Where-Object {$_.FriendlyName -like "*Hands-Free*" -and $_.FriendlyName -like "*AirPods*"} | '
-                "Disable-PnpDevice -Confirm:$false"
+                f'Get-PnpDevice -Class "AudioEndpoint" | '
+                f'Where-Object {{ {name_filter} ($_.FriendlyName -like "*Hands-Free*" -or $_.FriendlyName -like "*Головной телефон*") }} | '
+                f'ForEach-Object {{ Disable-PnpDevice -InputObject $_ -Confirm:$false; $_.FriendlyName }}'
             )
             res = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps_cmd],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=8,
             )
-            if res.returncode == 0:
-                return True, "Служба Hands-Free отключена! Качество стерео зафиксировано."
+            output = res.stdout.strip()
+            if output:
+                return True, f"Служба Hands-Free отключена: {output}"
+            elif res.returncode == 0:
+                return True, "Служба Hands-Free уже отключена или не активна."
             else:
-                return False, res.stderr or "Не удалось изменить параметры устройства."
+                return False, res.stderr or "Не удалось отключить службу Hands-Free."
         except Exception as e:
             return False, str(e)
-

@@ -72,7 +72,7 @@ class ControlCenterFlyout(QDialog):
         self.lbl_device_name = QLabel("AirPods", self)
         self.lbl_device_name.setObjectName("HeaderDeviceName")
 
-        self.lbl_status = QLabel("Ожидание подключения...", self)
+        self.lbl_status = QLabel("Поиск AirPods...", self)
         self.lbl_status.setObjectName("HeaderSubtitle")
 
         text_layout.addWidget(self.lbl_device_name)
@@ -172,7 +172,7 @@ class ControlCenterFlyout(QDialog):
         self.lbl_device_name.setText(state.device_name)
         status_txt = "Подключено" if state.connected else "Не подключено"
         if state.connected and state.rssi != -100:
-            status_txt += f" • Сигнал: {state.rssi} dBm"
+            status_txt += f" • {state.rssi} dBm"
         self.lbl_status.setText(status_txt)
 
         self.card_left.setData(state.left_battery, state.left_charging, state.left_in_ear)
@@ -206,7 +206,10 @@ class ControlCenterFlyout(QDialog):
             self.device_manager.stop_demo_mode()
 
     def on_audio_fix_clicked(self):
-        success, msg = AudioController.fix_handsfree_audio()
+        dev_name = ""
+        if self.device_manager.current_state:
+            dev_name = self.device_manager.current_state.device_name
+        success, msg = AudioController.fix_handsfree_audio(dev_name)
         self.btn_audio_fix.setText("✓ Качество зафиксировано!" if success else f"Инфо: {msg}")
 
     def toggle_at_position(self, pos: QPoint):
@@ -214,7 +217,6 @@ class ControlCenterFlyout(QDialog):
         if self.isVisible():
             self.hide()
         else:
-            # Position above the tray icon
             screen = QApplication.primaryScreen()
             if screen:
                 geom = screen.availableGeometry()

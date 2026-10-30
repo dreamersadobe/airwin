@@ -10,7 +10,8 @@ class AirPodsModel(Enum):
     AIRPODS_1 = ("AirPods (1-го поколения)", False, "airpods_1")
     AIRPODS_2 = ("AirPods (2-го поколения)", False, "airpods_2")
     AIRPODS_3 = ("AirPods (3-го поколения)", False, "airpods_3")
-    AIRPODS_4 = ("AirPods 4", True, "airpods_4")
+    AIRPODS_4 = ("AirPods 4", False, "airpods_4")
+    AIRPODS_4_ANC = ("AirPods 4 с шумоподавлением", True, "airpods_4")
     AIRPODS_PRO = ("AirPods Pro (1-го поколения)", True, "airpods_pro")
     AIRPODS_PRO_2 = ("AirPods Pro (2-го поколения)", True, "airpods_pro_2")
     AIRPODS_MAX = ("AirPods Max", True, "airpods_max")
@@ -114,3 +115,41 @@ class AirPodsState:
             rssi=self.rssi,
             last_updated=self.last_updated,
         )
+
+    def merge_with(self, new_state: "AirPodsState") -> "AirPodsState":
+        """Intelligently merges a new telemetry reading while preserving known attributes (macOS behavior)."""
+        merged = self.copy()
+
+        # Update model & names if more specific
+        if new_state.model != AirPodsModel.UNKNOWN:
+            merged.model = new_state.model
+        if new_state.device_name and new_state.device_name != "AirPods":
+            merged.device_name = new_state.device_name
+        if new_state.mac_address:
+            merged.mac_address = new_state.mac_address
+
+        # Earbud batteries
+        if new_state.left_battery >= 0:
+            merged.left_battery = new_state.left_battery
+            merged.left_charging = new_state.left_charging
+        if new_state.right_battery >= 0:
+            merged.right_battery = new_state.right_battery
+            merged.right_charging = new_state.right_charging
+
+        # Case battery: retain last known battery for up to 2 hours when case is closed
+        if new_state.case_battery >= 0:
+            merged.case_battery = new_state.case_battery
+            merged.case_charging = new_state.case_charging
+        elif new_state.case_open is False:
+            merged.case_charging = False
+
+        # In-ear & case presence
+        merged.left_in_ear = new_state.left_in_ear
+        merged.right_in_ear = new_state.right_in_ear
+        merged.case_open = new_state.case_open
+        merged.connected = new_state.connected
+        merged.noise_mode = new_state.noise_mode
+        if new_state.rssi != -100:
+            merged.rssi = new_state.rssi
+        merged.last_updated = time.time()
+        return merged

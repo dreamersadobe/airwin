@@ -7,17 +7,7 @@ from airwin.core.models import AirPodsModel, AirPodsState, NoiseControlMode
 
 class TestAirPodsParser(unittest.TestCase):
     def test_parse_airpods_pro_packet(self):
-        # Simulated raw Apple 0x07 proximity pairing packet:
-        # byte 0: 0x07 (Type)
-        # byte 1: 0x19 (Length)
-        # byte 2: 0x0E, byte 3: 0x20 (AirPods Pro 1)
-        # byte 4: 0x00
-        # byte 5: 0x00 (flip=0)
-        # byte 6: 0x98 (low nibble 8 -> 80% left, high nibble 9 -> 90% right)
-        # byte 7: 0x07 (case -> 70%)
-        # byte 8: 0x01 (left charging)
         raw = bytearray([0x07, 0x19, 0x0E, 0x20, 0x00, 0x00, 0x98, 0x07, 0x01] + [0x00] * 18)
-
         state = AirPodsParser.parse_manufacturer_data(bytes(raw), rssi=-55)
 
         self.assertIsNotNone(state)
@@ -31,11 +21,7 @@ class TestAirPodsParser(unittest.TestCase):
         self.assertEqual(state.rssi, -55)
 
     def test_parse_flipped_channels(self):
-        # byte 5: bit 5 set (0x20) -> flip=1
-        # byte 6: 0x59 (low nibble 9 -> right=90%, high nibble 5 -> left=50%)
-        # byte 8: 0x02 (b1 charged -> right charging when flip=0, or left when flip=1)
         raw = bytearray([0x07, 0x19, 0x14, 0x20, 0x00, 0x20, 0x59, 0x08, 0x02] + [0x00] * 18)
-
         state = AirPodsParser.parse_manufacturer_data(bytes(raw), rssi=-60)
         self.assertIsNotNone(state)
         self.assertEqual(state.model, AirPodsModel.AIRPODS_PRO_2)
@@ -44,11 +30,44 @@ class TestAirPodsParser(unittest.TestCase):
         self.assertEqual(state.case_battery, 80)
         self.assertTrue(state.left_charging)
 
+    def test_parse_tlv_wrapped_packet(self):
+        # Multi-TLV packet with 0x12 Find My followed by 0x07 Proximity Pairing
+        tlv_data = bytes.fromhex("12022e0207110673d9fa77ec5cf40b1ba702b19ac7a605")
+        state = AirPodsParser.parse_manufacturer_data(tlv_data, rssi=-48, device_name="utopia")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.left_battery, 70)
+        self.assertEqual(state.right_battery, 70)
+        self.assertEqual(state.device_name, "utopia")
+        self.assertEqual(state.model, AirPodsModel.AIRPODS_4_ANC)
+        self.assertTrue(state.right_in_ear)
+
+    def test_state_merging(self):
+        s1 = AirPodsState(
+            device_name="utopia",
+            left_battery=70,
+            right_battery=75,
+            case_battery=80,
+            case_open=True,
+            connected=True,
+        )
+        # s2 arrives when case is closed (case_battery = -1)
+        s2 = AirPodsState(
+            device_name="utopia",
+            left_battery=69,
+            right_battery=74,
+            case_battery=-1,
+            case_open=False,
+            connected=True,
+        )
+        merged = s1.merge_with(s2)
+        # Should keep case battery 80% instead of dropping to -1
+        self.assertEqual(merged.case_battery, 80)
+        self.assertEqual(merged.left_battery, 69)
+        self.assertFalse(merged.case_open)
+
     def test_invalid_packet(self):
-        # Empty or too short
         self.assertIsNone(AirPodsParser.parse_manufacturer_data(b""))
         self.assertIsNone(AirPodsParser.parse_manufacturer_data(b"\x07\x02"))
-        # Non-Apple proximity packet
         self.assertIsNone(AirPodsParser.parse_manufacturer_data(b"\x01\x02\x03\x04\x05\x06\x07\x08"))
 
     def test_battery_average_calculation(self):

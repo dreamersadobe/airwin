@@ -12,6 +12,7 @@ from airwin.ui.qt_compat import (
     QAction,
     QApplication,
     QColor,
+    QCursor,
     QFont,
     QIcon,
     QMenu,
@@ -88,7 +89,7 @@ class AirPodsTrayIcon(QSystemTrayIcon):
             bat_str = " | ".join(bat_parts) if bat_parts else "Подключено"
             tooltip = f"{state.device_name}\n{bat_str}\nШумоподавление: {state.noise_mode.value}"
         else:
-            tooltip = "AirWin — AirPods не подключены"
+            tooltip = f"AirWin — {state.device_name} (Не подключено)"
 
         self.setToolTip(tooltip)
         self._update_icon()
@@ -103,7 +104,8 @@ class AirPodsTrayIcon(QSystemTrayIcon):
 
         # Base AirPods earbud glyph
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(255, 255, 255, 240))
+        alpha = 240 if (self._current_state and self._current_state.connected) else 120
+        painter.setBrush(QColor(255, 255, 255, alpha))
 
         # Draw left earbud shape
         painter.drawRoundedRect(QRectF(14, 12, 14, 20), 7, 7)
@@ -134,12 +136,11 @@ class AirPodsTrayIcon(QSystemTrayIcon):
             QSystemTrayIcon.ActivationReason.Trigger,
             QSystemTrayIcon.ActivationReason.DoubleClick,
         ):
-            # Left click -> toggle control center flyout
-            cursor_pos = QApplication.primaryScreen().cursor().pos()
+            cursor_pos = QCursor.pos()
             self.control_center.toggle_at_position(cursor_pos)
 
     def _open_control_center(self):
-        cursor_pos = QApplication.primaryScreen().cursor().pos()
+        cursor_pos = QCursor.pos()
         self.control_center.toggle_at_position(cursor_pos)
 
     def _show_popup_card(self):
