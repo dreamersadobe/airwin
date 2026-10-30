@@ -1,4 +1,4 @@
-"""macOS Big Sur style Control Center flyout window for AirPods management."""
+"""macOS Big Sur / Sonoma style Control Center flyout window for AirPods management."""
 
 import sys
 from typing import Optional
@@ -8,17 +8,22 @@ from airwin.core.device_manager import DeviceManager
 from airwin.core.models import AirPodsState, NoiseControlMode
 from airwin.core.windows_audio import AudioController
 from airwin.ui.components import BatteryCardWidget, NoiseSegmentedControl
+from airwin.ui.dwm import enable_dwm_transparency
 from airwin.ui.qt_compat import (
+    QtCore,
     QApplication,
     QCheckBox,
     QColor,
     QDialog,
     QFrame,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QPainter,
+    QPainterPath,
+    QPen,
     QPoint,
     QPushButton,
+    QRectF,
     Qt,
     QVBoxLayout,
 )
@@ -40,31 +45,18 @@ class ControlCenterFlyout(QDialog):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Popup
+            | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         self._init_ui()
 
     def _init_ui(self):
-        root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(16, 16, 16, 16)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
 
-        # Card Container
-        self.card = QFrame(self)
-        self.card.setObjectName("ControlCenterCard")
-
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(30)
-        shadow.setColor(QColor(0, 0, 0, 180))
-        shadow.setOffset(0, 8)
-        self.card.setGraphicsEffect(shadow)
-
-        card_layout = QVBoxLayout(self.card)
-        card_layout.setContentsMargins(18, 18, 18, 18)
-        card_layout.setSpacing(14)
-
-        # 1. Header (Device Name & Status)
+        # 1. Header (Device Name, Status, and Close Button)
         header_layout = QHBoxLayout()
 
         text_layout = QVBoxLayout()
@@ -80,9 +72,16 @@ class ControlCenterFlyout(QDialog):
         header_layout.addLayout(text_layout)
         header_layout.addStretch()
 
-        card_layout.addLayout(header_layout)
+        self.btn_close = QPushButton("✕", self)
+        self.btn_close.setObjectName("CloseToolButton")
+        self.btn_close.setFixedSize(24, 24)
+        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_close.clicked.connect(self.hide)
+        header_layout.addWidget(self.btn_close)
 
-        # 2. Battery Grid
+        layout.addLayout(header_layout)
+
+        # 2. Battery Grid (Left, Right, Case)
         battery_frame = QFrame(self)
         battery_layout = QHBoxLayout(battery_frame)
         battery_layout.setContentsMargins(0, 0, 0, 0)
@@ -95,7 +94,7 @@ class ControlCenterFlyout(QDialog):
         battery_layout.addWidget(self.card_left)
         battery_layout.addWidget(self.card_right)
         battery_layout.addWidget(self.card_case)
-        card_layout.addWidget(battery_frame)
+        layout.addWidget(battery_frame)
 
         # 3. Noise Control (Шумоподавление) Section
         anc_section = QFrame(self)
@@ -112,14 +111,14 @@ class ControlCenterFlyout(QDialog):
         self.noise_selector.mode_changed.connect(self.on_noise_mode_selected)
         anc_layout.addWidget(self.noise_selector)
 
-        card_layout.addWidget(anc_section)
+        layout.addWidget(anc_section)
 
         # 4. Settings & Features Section
         settings_section = QFrame(self)
         settings_section.setObjectName("SectionCard")
         settings_layout = QVBoxLayout(settings_section)
         settings_layout.setContentsMargins(12, 10, 12, 10)
-        settings_layout.setSpacing(10)
+        settings_layout.setSpacing(8)
 
         lbl_settings_title = QLabel("Настройки и функции", self)
         lbl_settings_title.setObjectName("SectionTitle")
@@ -145,27 +144,53 @@ class ControlCenterFlyout(QDialog):
         self.cb_demo.toggled.connect(self.on_demo_toggled)
         settings_layout.addWidget(self.cb_demo)
 
-        card_layout.addWidget(settings_section)
+        layout.addWidget(settings_section)
 
         # 5. Fix Windows Hands-Free Audio Button
         self.btn_audio_fix = QPushButton("Оптимизировать звук Windows (Стерео)", self)
         self.btn_audio_fix.setObjectName("ActionButton")
         self.btn_audio_fix.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_audio_fix.clicked.connect(self.on_audio_fix_clicked)
-        card_layout.addWidget(self.btn_audio_fix)
+        layout.addWidget(self.btn_audio_fix)
 
-        # 6. Exit Button
+        # 6. Exit Button Row
         btn_row = QHBoxLayout()
-        self.btn_exit = QPushButton("Выход", self)
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        self.btn_exit = QPushButton("Выход из AirWin", self)
         self.btn_exit.setObjectName("DangerButton")
         self.btn_exit.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_exit.clicked.connect(QApplication.instance().quit)
         btn_row.addStretch()
         btn_row.addWidget(self.btn_exit)
-        card_layout.addLayout(btn_row)
+        layout.addLayout(btn_row)
 
-        root_layout.addWidget(self.card)
-        self.setFixedSize(360, 480)
+        self.setFixedSize(350, 470)
+
+    def paintEvent(self, event):
+        """Draws clean macOS Big Sur dark glass card background."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 20, 20)
+
+        # Rich dark slate
+        painter.fillPath(path, QColor(28, 30, 34, 252))
+
+        # Subtle glass border
+        painter.setPen(QPen(QColor(255, 255, 255, 36), 1.2))
+        painter.drawPath(path)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        enable_dwm_transparency(self)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.ActivationChange:
+            if not self.isActiveWindow():
+                self.hide()
 
     def update_state(self, state: AirPodsState):
         """Refreshes the UI with the latest AirPodsState."""
@@ -220,10 +245,10 @@ class ControlCenterFlyout(QDialog):
             screen = QApplication.primaryScreen()
             if screen:
                 geom = screen.availableGeometry()
-                x = min(pos.x() - self.width() // 2, geom.right() - self.width() - 10)
-                x = max(10, x)
+                x = min(pos.x() - self.width() // 2, geom.right() - self.width() - 12)
+                x = max(12, x)
                 # Position above taskbar
-                y = geom.bottom() - self.height() - 10
+                y = geom.bottom() - self.height() - 12
                 self.move(x, y)
             self.show()
             self.activateWindow()
