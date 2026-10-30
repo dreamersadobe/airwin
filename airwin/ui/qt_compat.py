@@ -5,6 +5,8 @@ import sys
 try:
     from PySide6 import QtCore, QtGui, QtWidgets
     from PySide6.QtCore import (
+        QEasingCurve,
+        QObject,
         QPoint,
         QPropertyAnimation,
         QRect,
@@ -49,6 +51,8 @@ except ImportError:
     try:
         from PyQt6 import QtCore, QtGui, QtWidgets
         from PyQt6.QtCore import (
+            QEasingCurve,
+            QObject,
             QPoint,
             QPropertyAnimation,
             QRect,

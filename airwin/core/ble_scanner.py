@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import threading
-import time
 from typing import Callable, Optional
 
 from airwin.core.airpods_parser import APPLE_COMPANY_ID, AirPodsParser
@@ -27,17 +26,19 @@ class BLEAirPodsScanner:
         if self._is_running:
             return
         self._is_running = True
-        self._thread = threading.Thread(target=self._run_async_loop, daemon=True, name="BLEScannerThread")
+        self._thread = threading.Thread(
+            target=self._run_async_loop, daemon=True, name="BLEScannerThread"
+        )
         self._thread.start()
         logger.info("BLE Scanner thread started")
 
     def stop(self) -> None:
-        """Stops the BLE scanner."""
+        """Stops the BLE scanner cleanly."""
         self._is_running = False
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread:
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=1.5)
             self._thread = None
         logger.info("BLE Scanner stopped")
 
@@ -48,12 +49,15 @@ class BLEAirPodsScanner:
         try:
             self._loop.run_until_complete(self._scan_coroutine())
         except Exception as e:
-            logger.error(f"Error in BLE scanner loop: {e}", exc_info=True)
+            logger.debug(f"BLE scanner loop closed: {e}")
         finally:
-            self._loop.close()
+            try:
+                self._loop.close()
+            except Exception:
+                pass
 
     async def _scan_coroutine(self) -> None:
-        """Bleak scanner loop with continuous detection."""
+        """Bleak scanner loop with continuous detection and error isolation."""
         try:
             from bleak import BleakScanner
         except ImportError:
@@ -64,24 +68,27 @@ class BLEAirPodsScanner:
             if not self._is_running:
                 return
 
-            mfg_data = advertisement_data.manufacturer_data
-            if not mfg_data:
-                return
+            try:
+                mfg_data = advertisement_data.manufacturer_data
+                if not mfg_data:
+                    return
 
-            # Check for Apple Company ID (0x004C)
-            apple_payload = mfg_data.get(APPLE_COMPANY_ID)
-            if not apple_payload:
-                return
+                # Check for Apple Company ID (0x004C)
+                apple_payload = mfg_data.get(APPLE_COMPANY_ID)
+                if not apple_payload:
+                    return
 
-            state = AirPodsParser.parse_manufacturer_data(
-                raw_data=apple_payload,
-                rssi=advertisement_data.rssi,
-                device_name=device.name,
-                mac_address=device.address,
-            )
+                state = AirPodsParser.parse_manufacturer_data(
+                    raw_data=apple_payload,
+                    rssi=advertisement_data.rssi,
+                    device_name=device.name,
+                    mac_address=device.address,
+                )
 
-            if state:
-                self.on_state_update(state)
+                if state:
+                    self.on_state_update(state)
+            except Exception as ex:
+                logger.debug(f"Ignored packet error: {ex}")
 
         try:
             async with BleakScanner(detection_callback=detection_callback) as scanner:
@@ -90,4 +97,4 @@ class BLEAirPodsScanner:
                 while self._is_running:
                     await asyncio.sleep(0.5)
         except Exception as e:
-            logger.error(f"BleakScanner exception: {e}")
+            logger.debug(f"BleakScanner loop exit: {e}")

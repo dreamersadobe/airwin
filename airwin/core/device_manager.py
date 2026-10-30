@@ -93,10 +93,9 @@ class DeviceManager:
 
     def handle_raw_state_update(self, new_state: AirPodsState) -> None:
         """Processes incoming telemetry from BLE scanner."""
-        # Correlate with known paired Windows device if present
-        if self._win_bt_watcher and self._win_bt_watcher.device_name != "AirPods":
-            if new_state.device_name == "AirPods" or not new_state.device_name:
-                new_state.device_name = self._win_bt_watcher.device_name
+        # Always correlate with known paired Windows device name and model
+        if self._win_bt_watcher and self._win_bt_watcher.device_name and self._win_bt_watcher.device_name != "AirPods":
+            new_state.device_name = self._win_bt_watcher.device_name
             if self._win_bt_watcher.mac_address:
                 new_state.mac_address = self._win_bt_watcher.mac_address
             if self._win_bt_watcher.model != AirPodsModel.UNKNOWN:

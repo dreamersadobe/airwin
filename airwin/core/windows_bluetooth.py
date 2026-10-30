@@ -2,17 +2,12 @@
 
 import asyncio
 import logging
-import re
 import threading
-import time
 from typing import Callable, Optional
 
 from airwin.core.models import AirPodsModel
 
 logger = logging.getLogger(__name__)
-
-# Standard Apple Bluetooth Vendor ID
-APPLE_VID = 0x004C
 
 
 class WindowsBluetoothWatcher:
@@ -34,6 +29,7 @@ class WindowsBluetoothWatcher:
         self.mac_address = ""
         self.model = AirPodsModel.AIRPODS_PRO_2
         self.is_connected = False
+        self._cached_device = None
 
     def start(self) -> None:
         if self._is_running:
@@ -50,7 +46,7 @@ class WindowsBluetoothWatcher:
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread:
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=1.5)
             self._thread = None
         logger.info("Windows Bluetooth Watcher stopped")
 
@@ -60,36 +56,46 @@ class WindowsBluetoothWatcher:
         try:
             self._loop.run_until_complete(self._monitor())
         except Exception as e:
-            logger.error(f"Error in WindowsBluetoothWatcher loop: {e}", exc_info=True)
+            logger.debug(f"WindowsBluetoothWatcher loop finished: {e}")
         finally:
-            self._loop.close()
+            try:
+                self._loop.close()
+            except Exception:
+                pass
 
     async def _monitor(self) -> None:
         try:
             from winrt.windows.devices.bluetooth import BluetoothDevice
-            from winrt.windows.devices.enumeration import DeviceInformation
         except ImportError:
             logger.warning("WinRT Bluetooth not available. Skipping Windows Bluetooth watcher.")
             return
 
         last_known_status = None
+        find_counter = 0
 
         while self._is_running:
             try:
-                apple_dev = await self._find_paired_apple_device()
-                if apple_dev:
-                    curr_conn = (int(apple_dev.connection_status) == 1)
+                # Find device if not yet discovered, or re-verify every 30 seconds
+                if self._cached_device is None or find_counter >= 15:
+                    self._cached_device = await self._find_paired_apple_device()
+                    find_counter = 0
+
+                find_counter += 1
+
+                if self._cached_device:
+                    curr_conn = (int(self._cached_device.connection_status) == 1)
                     if last_known_status is None or curr_conn != last_known_status:
                         last_known_status = curr_conn
                         self.is_connected = curr_conn
                         logger.info(
-                            f"Windows device '{self.device_name}' connection status: {curr_conn}"
+                            f"Windows BT device '{self.device_name}' connection: {curr_conn}"
                         )
                         self.on_connection_changed(
                             curr_conn, self.device_name, self.mac_address, self.model
                         )
             except Exception as e:
                 logger.debug(f"Bluetooth device poll error: {e}")
+                self._cached_device = None
 
             await asyncio.sleep(2.0)
 
@@ -107,7 +113,6 @@ class WindowsBluetoothWatcher:
                 d_name = d.name or ""
                 d_id = d.id or ""
 
-                # Check for Apple keywords or ID patterns
                 is_apple = (
                     "airpod" in d_name.lower()
                     or "beats" in d_name.lower()
@@ -127,7 +132,6 @@ class WindowsBluetoothWatcher:
                         self.device_name = dev.name
                         self.mac_address = formatted_mac
 
-                        # Identify Model
                         name_lower = dev.name.lower()
                         if "pro 2" in name_lower:
                             self.model = AirPodsModel.AIRPODS_PRO_2
