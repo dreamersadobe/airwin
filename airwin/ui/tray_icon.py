@@ -5,9 +5,10 @@ from typing import Optional
 from airwin.config import AppConfig
 from airwin.core.device_manager import DeviceManager
 from airwin.core.models import AirPodsState
-from airwin.ui.components import get_battery_color
+from airwin.ui.components import battery_color, draw_earbud
 from airwin.ui.control_center import ControlCenterFlyout
 from airwin.ui.popup_card import AirPodsPopupCard
+from airwin.ui.styles import MacTheme, get_theme
 from airwin.ui.qt_compat import (
     QAction,
     QApplication,
@@ -41,6 +42,7 @@ class AirPodsTrayIcon(QSystemTrayIcon):
         self.config = config
         self.control_center = control_center
         self.popup_card = popup_card
+        self.theme: MacTheme = get_theme(config.dark_mode)
 
         self._current_state: Optional[AirPodsState] = None
 
@@ -94,6 +96,10 @@ class AirPodsTrayIcon(QSystemTrayIcon):
         self.setToolTip(tooltip)
         self._update_icon()
 
+    def set_theme(self, theme: MacTheme) -> None:
+        self.theme = theme
+        self._update_icon()
+
     def _update_icon(self):
         """Generates dynamic crisp 64x64 tray icon."""
         pixmap = QPixmap(64, 64)
@@ -102,29 +108,23 @@ class AirPodsTrayIcon(QSystemTrayIcon):
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Base AirPods earbud glyph
-        painter.setPen(Qt.PenStyle.NoPen)
-        alpha = 240 if (self._current_state and self._current_state.connected) else 120
-        painter.setBrush(QColor(255, 255, 255, alpha))
+        connected = bool(self._current_state and self._current_state.connected)
+        alpha = 240 if connected else 120
+        glyph_color = QColor(255, 255, 255, alpha)
 
-        # Draw left earbud shape
-        painter.drawRoundedRect(QRectF(14, 12, 14, 20), 7, 7)
-        painter.drawRoundedRect(QRectF(19, 24, 6, 26), 3, 3)
-
-        # Draw right earbud shape
-        painter.drawRoundedRect(QRectF(36, 12, 14, 20), 7, 7)
-        painter.drawRoundedRect(QRectF(39, 24, 6, 26), 3, 3)
+        draw_earbud(painter, QRectF(11, 8, 16, 32), glyph_color)
+        draw_earbud(painter, QRectF(37, 8, 16, 32), glyph_color)
 
         # Battery percentage badge overlay
-        if self._current_state and self._current_state.connected and self.config.tray_show_percentage:
+        if connected and self.config.tray_show_percentage:
             avg_bat = self._current_state.average_earbud_battery
             if avg_bat >= 0:
-                # Pill badge at bottom
-                badge_rect = QRectF(2, 42, 60, 20)
-                painter.setBrush(get_battery_color(avg_bat))
-                painter.drawRoundedRect(badge_rect, 10, 10)
+                badge_rect = QRectF(2, 44, 60, 18)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(battery_color(self.theme, avg_bat))
+                painter.drawRoundedRect(badge_rect, 9, 9)
 
-                painter.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+                painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
                 painter.setPen(QColor(0, 0, 0))
                 painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, f"{avg_bat}%")
 

@@ -1,159 +1,144 @@
-"""Windows 11 Fluent notification flyout for AirPods case opening and battery telemetry."""
+"""macOS-style AirPods battery card shown when the case lid opens."""
 
-import sys
 from airwin.config import AppConfig
 from airwin.core.models import AirPodsState
-from airwin.ui.components import BatteryCardWidget
-from airwin.ui.dwm import enable_dwm_transparency
+from airwin.ui.components import BatteryItem, MacPopover
 from airwin.ui.qt_compat import (
-    QEasingCurve,
     QApplication,
-    QColor,
-    QDialog,
     QHBoxLayout,
     QLabel,
-    QPainter,
-    QPainterPath,
-    QPen,
     QPoint,
-    QPropertyAnimation,
-    QPushButton,
-    QRectF,
-    Qt,
     QTimer,
     QVBoxLayout,
+    Qt,
 )
-from airwin.ui.styles import POPUP_CARD_STYLE
+from airwin.ui.styles import MacTheme, get_theme
 
 
-class AirPodsPopupCard(QDialog):
-    """Windows 11 Fluent flyout shown upon AirPods case lid opening or connection."""
+class AirPodsPopupCard(MacPopover):
+    """Compact translucent card that mirrors the macOS AirPods popup."""
 
-    def __init__(self, config: AppConfig, parent=None):
-        super().__init__(parent)
-        self.config = config
-
-        self.setObjectName("PopupRoot")
-        self.setStyleSheet(POPUP_CARD_STYLE)
-
-        # Frameless, translucent, always on top, tool window
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
+    def __init__(self, config: AppConfig, theme: MacTheme = None, parent=None):
+        theme = theme or get_theme(config.dark_mode)
+        super().__init__(
+            theme,
+            panel_width=340,
+            radius=20,
+            shadow=18,
+            no_activate=True,
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.config = config
 
         self._auto_dismiss_timer = QTimer(self)
         self._auto_dismiss_timer.setSingleShot(True)
-        self._auto_dismiss_timer.timeout.connect(self.animate_hide)
+        self._auto_dismiss_timer.timeout.connect(self.dismiss)
 
-        self._anim = None
         self._init_ui()
+        self.auto_size()
 
-    def _init_ui(self):
+    def _init_ui(self) -> None:
+        s = self.shadow
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(12)
-
-        # Header: Device Name & Status
-        header_layout = QVBoxLayout()
-        header_layout.setSpacing(2)
+        layout.setContentsMargins(s + 16, s + 14, s + 16, s + 14)
+        layout.setSpacing(6)
 
         self.lbl_title = QLabel("AirPods", self)
         self.lbl_title.setObjectName("PopupTitle")
         self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.lbl_subtitle = QLabel("Подключено", self)
-        self.lbl_subtitle.setObjectName("PopupSubtitle")
-        self.lbl_subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_status = QLabel("", self)
+        self.lbl_status.setObjectName("PopupStatus")
+        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_status.setTextFormat(Qt.TextFormat.RichText)
 
-        header_layout.addWidget(self.lbl_title)
-        header_layout.addWidget(self.lbl_subtitle)
-        layout.addLayout(header_layout)
+        layout.addWidget(self.lbl_title)
+        layout.addWidget(self.lbl_status)
 
-        # Battery Cards Row (Left, Right, Case)
-        self.battery_layout = QHBoxLayout()
-        self.battery_layout.setSpacing(8)
+        battery_row = QHBoxLayout()
+        battery_row.setContentsMargins(0, 6, 0, 0)
+        battery_row.setSpacing(10)
 
-        self.card_left = BatteryCardWidget("Левый", "🎧", self)
-        self.card_right = BatteryCardWidget("Правый", "🎧", self)
-        self.card_case = BatteryCardWidget("Кейс", "🔋", self)
+        self.card_left = BatteryItem("Левый", "left", self.theme, self)
+        self.card_right = BatteryItem("Правый", "right", self.theme, self)
+        self.card_case = BatteryItem("Кейс", "case", self.theme, self)
 
-        self.battery_layout.addWidget(self.card_left)
-        self.battery_layout.addWidget(self.card_right)
-        self.battery_layout.addWidget(self.card_case)
-        layout.addLayout(self.battery_layout)
+        battery_row.addStretch()
+        battery_row.addWidget(self.card_left)
+        battery_row.addWidget(self.card_right)
+        battery_row.addWidget(self.card_case)
+        battery_row.addStretch()
+        layout.addLayout(battery_row)
 
-        # Done button
-        btn_layout = QHBoxLayout()
-        btn_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    def apply_theme(self, theme: MacTheme) -> None:
+        self.card_left.set_theme(theme)
+        self.card_right.set_theme(theme)
+        self.card_case.set_theme(theme)
+        if self.lbl_status.text():
+            self._refresh_status()
 
-        self.btn_done = QPushButton("Готово", self)
-        self.btn_done.setObjectName("DoneButton")
-        self.btn_done.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_done.clicked.connect(self.animate_hide)
-        btn_layout.addWidget(self.btn_done)
+    def _refresh_status(self) -> None:
+        state = getattr(self, "_state", None)
+        if state is None:
+            return
 
-        layout.addLayout(btn_layout)
-        self.setFixedSize(350, 215)
-
-    def paintEvent(self, event):
-        """Draws Windows 11 Fluent Acrylic dark surface with 12px rounded corners."""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        path = QPainterPath()
-        path.addRoundedRect(rect, 12, 12)
-
-        # Windows 11 Dark Acrylic background
-        painter.fillPath(path, QColor(32, 32, 32, 245))
-
-        # Windows 11 subtle border
-        painter.setPen(QPen(QColor(255, 255, 255, 26), 1))
-        painter.drawPath(path)
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        enable_dwm_transparency(self)
-
-    def show_for_state(self, state: AirPodsState):
-        """Populates state and shows flyout with smooth slide-up animation."""
-        self.lbl_title.setText(state.device_name)
         if state.case_open:
-            self.lbl_subtitle.setText("● Кейс открыт")
+            dot = self.theme.accent.name()
+            text = "Кейс открыт"
+        elif state.connected:
+            dot = self.theme.green.name()
+            text = "Подключено"
         else:
-            self.lbl_subtitle.setText("● Подключено" if state.connected else "Поиск...")
+            dot = self.theme.text_tertiary.name()
+            text = "Поиск…"
 
-        self.card_left.setData(state.left_battery, state.left_charging, state.left_in_ear)
-        self.card_right.setData(state.right_battery, state.right_charging, state.right_in_ear)
-        self.card_case.setData(state.case_battery, state.case_charging, False)
+        self.lbl_status.setText(
+            f'<span style="color:{dot};">●</span>&nbsp; {text}'
+        )
 
-        # Position at bottom-right corner above Windows 11 taskbar
+    def show_for_state(self, state: AirPodsState) -> None:
+        self._state = state
+        self.lbl_title.setText(state.device_name)
+        self._refresh_status()
+
+        self.card_left.set_data(state.left_battery, state.left_charging, state.left_in_ear)
+        self.card_right.set_data(state.right_battery, state.right_charging, state.right_in_ear)
+        self.card_case.set_data(state.case_battery, state.case_charging, False)
+
         screen = QApplication.primaryScreen()
-        if screen:
-            geom = screen.availableGeometry()
-            target_x = geom.right() - self.width() - 16
-            target_y = geom.bottom() - self.height() - 16
-            start_y = target_y + 14
-
-            self.move(target_x, start_y)
+        if screen is None:
             self.show()
+            return
 
-            self._anim = QPropertyAnimation(self, b"pos")
-            self._anim.setDuration(220)
-            self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-            self._anim.setStartValue(QPoint(target_x, start_y))
-            self._anim.setEndValue(QPoint(target_x, target_y))
-            self._anim.start()
-        else:
-            self.show()
+        geom = screen.availableGeometry()
+        target = QPoint(
+            geom.right() - self.width() - 12,
+            geom.bottom() - self.height() - 12,
+        )
+
+        self._auto_dismiss_timer.stop()
+        self.setWindowOpacity(0.0)
+        self.move(target.x(), target.y() + 10)
+        self.show()
+        self.raise_()
+        self.fade_in()
+        self.slide_in(target)
 
         if self.config.popup_duration_sec > 0:
             self._auto_dismiss_timer.start(self.config.popup_duration_sec * 1000)
 
-    def animate_hide(self):
+    def dismiss(self) -> None:
         self._auto_dismiss_timer.stop()
+        if not self.isVisible():
+            return
+        self.fade_out(on_finished=self._finish_hide)
+
+    def _finish_hide(self) -> None:
         self.hide()
+        self.setWindowOpacity(1.0)
+        self._closing = False
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dismiss()
+        else:
+            super().mousePressEvent(event)

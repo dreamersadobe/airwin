@@ -15,6 +15,7 @@ from airwin.core.models import AirPodsState
 from airwin.ui.control_center import ControlCenterFlyout
 from airwin.ui.popup_card import AirPodsPopupCard
 from airwin.ui.qt_compat import QApplication, QSystemTrayIcon
+from airwin.ui.styles import get_theme, mac_font
 from airwin.ui.tray_icon import AirPodsTrayIcon
 
 logger = logging.getLogger("airwin")
@@ -45,6 +46,17 @@ def parse_args():
         action="store_true",
         help="Включить подробный вывод отладочных сообщений.",
     )
+    appearance = parser.add_mutually_exclusive_group()
+    appearance.add_argument(
+        "--light",
+        action="store_true",
+        help="Принудительно использовать светлое оформление macOS.",
+    )
+    appearance.add_argument(
+        "--dark",
+        action="store_true",
+        help="Принудительно использовать тёмное оформление macOS.",
+    )
     return parser.parse_args()
 
 
@@ -69,19 +81,26 @@ def main():
         config.popup_on_case_open = False
     if args.mac:
         config.preferred_device_mac = args.mac
+    if args.light:
+        config.dark_mode = False
+    if args.dark:
+        config.dark_mode = True
+
+    theme = get_theme(config.dark_mode)
 
     # Create Qt Application
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("AirWin")
     app.setOrganizationName("AirWin")
+    app.setFont(mac_font(13))
 
     # Check for System Tray support
     if not QSystemTrayIcon.isSystemTrayAvailable():
         logger.warning("System tray is not available on this system.")
 
     # UI Components
-    popup_card = AirPodsPopupCard(config)
+    popup_card = AirPodsPopupCard(config, theme)
 
     # Thread-Safe Qt Bridge: bridges background threads to Qt Main GUI Thread
     bridge = AirWinBridge()
@@ -109,12 +128,22 @@ def main():
         on_case_opened=bridge.case_opened.emit,
     )
 
-    control_center = ControlCenterFlyout(device_manager=device_manager, config=config)
+    control_center = ControlCenterFlyout(
+        device_manager=device_manager,
+        config=config,
+        theme=theme,
+    )
+    control_center.theme_changed.connect(
+        lambda dark: popup_card.set_theme(get_theme(dark))
+    )
     tray_icon = AirPodsTrayIcon(
         device_manager=device_manager,
         config=config,
         control_center=control_center,
         popup_card=popup_card,
+    )
+    control_center.theme_changed.connect(
+        lambda dark: tray_icon.set_theme(get_theme(dark))
     )
 
     tray_icon.show()

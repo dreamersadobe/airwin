@@ -5,6 +5,7 @@ import sys
 try:
     from PySide6 import QtCore, QtGui, QtWidgets
     from PySide6.QtCore import (
+        Property,
         QEasingCurve,
         QObject,
         QPoint,

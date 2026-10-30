@@ -1,249 +1,310 @@
-"""Windows 11 Quick Settings style flyout window for AirPods management."""
-
-import sys
-from typing import Optional
+"""macOS Control Center style AirPods panel."""
 
 from airwin.config import AppConfig
 from airwin.core.device_manager import DeviceManager
 from airwin.core.models import AirPodsState, NoiseControlMode
 from airwin.core.windows_audio import AudioController
-from airwin.ui.components import BatteryCardWidget, FluentToggleSwitch, NoiseSegmentedControl
-from airwin.ui.dwm import enable_dwm_transparency
+from airwin.ui.components import (
+    BatteryItem,
+    DeviceBadge,
+    MacPopover,
+    NoiseButton,
+    SettingRow,
+    SettingsCard,
+)
 from airwin.ui.qt_compat import (
-    QtCore,
     QApplication,
-    QColor,
-    QDialog,
-    QFrame,
     QHBoxLayout,
     QLabel,
-    QPainter,
-    QPainterPath,
-    QPen,
     QPoint,
     QPushButton,
-    QRectF,
-    Qt,
+    QtCore,
     QVBoxLayout,
+    Qt,
+    Signal,
 )
-from airwin.ui.styles import CONTROL_CENTER_STYLE
+from airwin.ui.styles import MacTheme, get_theme
 from airwin.utils.autostart import set_launch_on_startup
 
 
-class ControlCenterFlyout(QDialog):
-    """Windows 11 Quick Settings style flyout opened when clicking the tray icon."""
+class ControlCenterFlyout(MacPopover):
+    """Translucent AirPods panel opened from the system tray."""
 
-    def __init__(self, device_manager: DeviceManager, config: AppConfig, parent=None):
-        super().__init__(parent)
+    theme_changed = Signal(bool)
+
+    def __init__(
+        self,
+        device_manager: DeviceManager,
+        config: AppConfig,
+        theme: MacTheme = None,
+        parent=None,
+    ):
+        theme = theme or get_theme(config.dark_mode)
+        super().__init__(
+            theme,
+            panel_width=360,
+            radius=20,
+            shadow=18,
+            no_activate=False,
+        )
         self.device_manager = device_manager
         self.config = config
-
-        self.setObjectName("ControlCenterRoot")
-        self.setStyleSheet(CONTROL_CENTER_STYLE)
-
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._state = None
 
         self._init_ui()
+        self.auto_size()
 
-    def _init_ui(self):
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+    def _init_ui(self) -> None:
+        s = self.shadow
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(s + 18, s + 16, s + 18, s + 14)
+        layout.setSpacing(14)
 
-        # 1. Header (Device Name, Status, and Close Button)
-        header_layout = QHBoxLayout()
+        # Header --------------------------------------------------------
+        header = QHBoxLayout()
+        header.setSpacing(12)
 
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(2)
+        self.badge = DeviceBadge(self.theme, self)
+        header.addWidget(self.badge)
+
+        text_column = QVBoxLayout()
+        text_column.setSpacing(1)
+        text_column.setContentsMargins(0, 0, 0, 0)
+
         self.lbl_device_name = QLabel("AirPods", self)
         self.lbl_device_name.setObjectName("HeaderDeviceName")
 
-        self.lbl_status = QLabel("Поиск AirPods...", self)
-        self.lbl_status.setObjectName("HeaderSubtitle")
+        self.lbl_status = QLabel("", self)
+        self.lbl_status.setObjectName("HeaderStatus")
+        self.lbl_status.setTextFormat(Qt.TextFormat.RichText)
 
-        text_layout.addWidget(self.lbl_device_name)
-        text_layout.addWidget(self.lbl_status)
-        header_layout.addLayout(text_layout)
-        header_layout.addStretch()
+        text_column.addWidget(self.lbl_device_name)
+        text_column.addWidget(self.lbl_status)
 
-        self.btn_close = QPushButton("✕", self)
-        self.btn_close.setObjectName("CloseToolButton")
-        self.btn_close.setFixedSize(26, 26)
-        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_close.clicked.connect(self.hide)
-        header_layout.addWidget(self.btn_close)
+        header.addLayout(text_column)
+        header.addStretch()
+        layout.addLayout(header)
 
-        layout.addLayout(header_layout)
+        # Battery -------------------------------------------------------
+        battery_row = QHBoxLayout()
+        battery_row.setSpacing(10)
 
-        # 2. Battery Grid (Left, Right, Case)
-        battery_frame = QFrame(self)
-        battery_layout = QHBoxLayout(battery_frame)
-        battery_layout.setContentsMargins(0, 0, 0, 0)
-        battery_layout.setSpacing(8)
+        self.card_left = BatteryItem("Левый", "left", self.theme, self)
+        self.card_right = BatteryItem("Правый", "right", self.theme, self)
+        self.card_case = BatteryItem("Кейс", "case", self.theme, self)
 
-        self.card_left = BatteryCardWidget("Левый", "🎧", self)
-        self.card_right = BatteryCardWidget("Правый", "🎧", self)
-        self.card_case = BatteryCardWidget("Кейс", "🔋", self)
+        battery_row.addStretch()
+        battery_row.addWidget(self.card_left)
+        battery_row.addWidget(self.card_right)
+        battery_row.addWidget(self.card_case)
+        battery_row.addStretch()
+        layout.addLayout(battery_row)
 
-        battery_layout.addWidget(self.card_left)
-        battery_layout.addWidget(self.card_right)
-        battery_layout.addWidget(self.card_case)
-        layout.addWidget(battery_frame)
+        # Noise control -------------------------------------------------
+        noise_group = QVBoxLayout()
+        noise_group.setSpacing(8)
+        noise_group.addWidget(self._section_title("Шумоподавление"))
 
-        # 3. Noise Control (Шумоподавление) Section
-        anc_section = QFrame(self)
-        anc_section.setObjectName("SectionCard")
-        anc_layout = QVBoxLayout(anc_section)
-        anc_layout.setContentsMargins(10, 8, 10, 8)
-        anc_layout.setSpacing(6)
+        noise_row = QHBoxLayout()
+        noise_row.setSpacing(8)
+        noise_row.addStretch()
 
-        lbl_anc_title = QLabel("Управление шумом", self)
-        lbl_anc_title.setObjectName("SectionTitle")
-        anc_layout.addWidget(lbl_anc_title)
+        self.noise_buttons = {}
+        noise_options = (
+            (NoiseControlMode.NOISE_CANCELLATION, "Шумоподавление"),
+            (NoiseControlMode.TRANSPARENCY, "Прозрачность"),
+            (NoiseControlMode.OFF, "Выкл"),
+        )
+        for mode, caption in noise_options:
+            button = NoiseButton(mode, caption, self.theme, self)
+            button.clicked.connect(self.on_noise_mode_selected)
+            self.noise_buttons[mode] = button
+            noise_row.addWidget(button)
 
-        self.noise_selector = NoiseSegmentedControl(self)
-        self.noise_selector.mode_changed.connect(self.on_noise_mode_selected)
-        anc_layout.addWidget(self.noise_selector)
+        noise_row.addStretch()
+        noise_group.addLayout(noise_row)
+        layout.addLayout(noise_group)
 
-        layout.addWidget(anc_section)
+        # Settings ------------------------------------------------------
+        settings_group = QVBoxLayout()
+        settings_group.setSpacing(8)
+        settings_group.addWidget(self._section_title("Параметры"))
 
-        # 4. Settings Section with Native Windows 11 Toggle Switches
-        settings_section = QFrame(self)
-        settings_section.setObjectName("SectionCard")
-        settings_layout = QVBoxLayout(settings_section)
-        settings_layout.setContentsMargins(12, 10, 12, 10)
-        settings_layout.setSpacing(6)
+        self.row_autopause = SettingRow(
+            "Автопауза при снятии наушника",
+            self.config.auto_pause_enabled,
+            self.theme,
+            last=False,
+            parent=self,
+        )
+        self.row_popup = SettingRow(
+            "Окно при открытии кейса",
+            self.config.popup_on_case_open,
+            self.theme,
+            last=False,
+            parent=self,
+        )
+        self.row_autostart = SettingRow(
+            "Запуск вместе с Windows",
+            self.config.launch_on_startup,
+            self.theme,
+            last=False,
+            parent=self,
+        )
+        self.row_dark = SettingRow(
+            "Тёмное оформление",
+            self.config.dark_mode,
+            self.theme,
+            last=True,
+            parent=self,
+        )
 
-        lbl_settings_title = QLabel("Параметры", self)
-        lbl_settings_title.setObjectName("SectionTitle")
-        settings_layout.addWidget(lbl_settings_title)
+        self.settings_card = SettingsCard(
+            [
+                self.row_autopause,
+                self.row_popup,
+                self.row_autostart,
+                self.row_dark,
+            ],
+            self.theme,
+            self,
+        )
+        settings_group.addWidget(self.settings_card)
+        layout.addLayout(settings_group)
 
-        self.sw_autopause = FluentToggleSwitch("Автопауза при снятии наушника", self.config.auto_pause_enabled, self)
-        self.sw_autopause.toggled.connect(self.on_autopause_toggled)
-        settings_layout.addWidget(self.sw_autopause)
-
-        self.sw_popup = FluentToggleSwitch("Всплывающее окно при открытии кейса", self.config.popup_on_case_open, self)
-        self.sw_popup.toggled.connect(self.on_popup_toggled)
-        settings_layout.addWidget(self.sw_popup)
-
-        self.sw_autostart = FluentToggleSwitch("Запуск вместе с Windows", self.config.launch_on_startup, self)
-        self.sw_autostart.toggled.connect(self.on_autostart_toggled)
-        settings_layout.addWidget(self.sw_autostart)
-
-        self.sw_demo = FluentToggleSwitch("Режим демонстрации (Тест)", self.config.demo_mode, self)
-        self.sw_demo.toggled.connect(self.on_demo_toggled)
-        settings_layout.addWidget(self.sw_demo)
-
-        layout.addWidget(settings_section)
-
-        # 5. Fix Windows Hands-Free Audio Button
-        self.btn_audio_fix = QPushButton("Оптимизировать звук Windows (Стерео)", self)
-        self.btn_audio_fix.setObjectName("ActionButton")
+        # Actions -------------------------------------------------------
+        self.btn_audio_fix = QPushButton("Исправить качество звука Windows", self)
+        self.btn_audio_fix.setObjectName("MacActionButton")
         self.btn_audio_fix.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_audio_fix.clicked.connect(self.on_audio_fix_clicked)
         layout.addWidget(self.btn_audio_fix)
 
-        # 6. Exit Button Row
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        self.btn_exit = QPushButton("Выход из AirWin", self)
-        self.btn_exit.setObjectName("DangerButton")
+        self.btn_exit = QPushButton("Завершить AirWin", self)
+        self.btn_exit.setObjectName("MacGhostButton")
         self.btn_exit.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_exit.clicked.connect(QApplication.instance().quit)
-        btn_row.addStretch()
-        btn_row.addWidget(self.btn_exit)
-        layout.addLayout(btn_row)
+        layout.addWidget(self.btn_exit, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        self.setFixedSize(350, 480)
+        # Signals -------------------------------------------------------
+        self.row_autopause.switch.toggled.connect(self.on_autopause_toggled)
+        self.row_popup.switch.toggled.connect(self.on_popup_toggled)
+        self.row_autostart.switch.toggled.connect(self.on_autostart_toggled)
+        self.row_dark.switch.toggled.connect(self.on_dark_mode_toggled)
 
-    def paintEvent(self, event):
-        """Draws clean Windows 11 Fluent dark Acrylic background."""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._refresh_status()
 
-        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        path = QPainterPath()
-        path.addRoundedRect(rect, 12, 12)
+    def _section_title(self, text: str) -> QLabel:
+        label = QLabel(text, self)
+        label.setObjectName("SectionTitle")
+        return label
 
-        # Windows 11 Dark Acrylic
-        painter.fillPath(path, QColor(32, 32, 32, 248))
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
+    def apply_theme(self, theme: MacTheme) -> None:
+        self.badge.set_theme(theme)
+        self.card_left.set_theme(theme)
+        self.card_right.set_theme(theme)
+        self.card_case.set_theme(theme)
+        for button in self.noise_buttons.values():
+            button.set_theme(theme)
+        self.settings_card.set_theme(theme)
+        self._refresh_status()
 
-        # Windows 11 1px border
-        painter.setPen(QPen(QColor(255, 255, 255, 26), 1))
-        painter.drawPath(path)
+    def on_dark_mode_toggled(self, checked: bool) -> None:
+        self.config.dark_mode = checked
+        self.config.save()
+        self.set_theme(get_theme(checked))
+        self.theme_changed.emit(checked)
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        enable_dwm_transparency(self)
+    # ------------------------------------------------------------------
+    # State
+    # ------------------------------------------------------------------
+    def _refresh_status(self) -> None:
+        state = self._state
+        if state is not None and state.connected:
+            dot = self.theme.green.name()
+            text = "Подключено"
+        else:
+            dot = self.theme.text_tertiary.name()
+            text = "Не подключено"
 
-    def changeEvent(self, event):
-        super().changeEvent(event)
-        if event.type() == QtCore.QEvent.Type.ActivationChange:
-            if not self.isActiveWindow():
-                self.hide()
+        self.lbl_status.setText(
+            f'<span style="color:{dot};">●</span>&nbsp; {text}'
+        )
 
-    def update_state(self, state: AirPodsState):
-        """Refreshes the UI with the latest AirPodsState."""
+    def update_state(self, state: AirPodsState) -> None:
+        self._state = state
         self.lbl_device_name.setText(state.device_name)
-        status_txt = "● Подключено" if state.connected else "● Не подключено"
-        if state.connected and state.rssi != -100:
-            status_txt += f"  ({state.rssi} dBm)"
-        self.lbl_status.setText(status_txt)
+        self._refresh_status()
 
-        self.card_left.setData(state.left_battery, state.left_charging, state.left_in_ear)
-        self.card_right.setData(state.right_battery, state.right_charging, state.right_in_ear)
-        self.card_case.setData(state.case_battery, state.case_charging, False)
+        self.card_left.set_data(state.left_battery, state.left_charging, state.left_in_ear)
+        self.card_right.set_data(state.right_battery, state.right_charging, state.right_in_ear)
+        self.card_case.set_data(state.case_battery, state.case_charging, False)
 
-        self.noise_selector.set_mode(state.noise_mode, user_click=False)
+        for mode, button in self.noise_buttons.items():
+            button.set_active(mode == state.noise_mode)
 
-    def on_noise_mode_selected(self, mode: NoiseControlMode):
+    # ------------------------------------------------------------------
+    # Handlers
+    # ------------------------------------------------------------------
+    def on_noise_mode_selected(self, mode: NoiseControlMode) -> None:
+        for current, button in self.noise_buttons.items():
+            button.set_active(current == mode)
         self.device_manager.set_noise_mode(mode)
 
-    def on_autopause_toggled(self, checked: bool):
+    def on_autopause_toggled(self, checked: bool) -> None:
         self.config.auto_pause_enabled = checked
         self.config.save()
 
-    def on_popup_toggled(self, checked: bool):
+    def on_popup_toggled(self, checked: bool) -> None:
         self.config.popup_on_case_open = checked
         self.config.save()
 
-    def on_autostart_toggled(self, checked: bool):
+    def on_autostart_toggled(self, checked: bool) -> None:
         self.config.launch_on_startup = checked
         self.config.save()
         set_launch_on_startup(checked)
 
-    def on_demo_toggled(self, checked: bool):
-        self.config.demo_mode = checked
-        self.config.save()
-        if checked:
-            self.device_manager.start_demo_mode()
-        else:
-            self.device_manager.stop_demo_mode()
-
-    def on_audio_fix_clicked(self):
-        dev_name = ""
+    def on_audio_fix_clicked(self) -> None:
+        device_name = ""
         if self.device_manager.current_state:
-            dev_name = self.device_manager.current_state.device_name
-        success, msg = AudioController.fix_handsfree_audio(dev_name)
-        self.btn_audio_fix.setText("✓ Качество зафиксировано!" if success else f"Инфо: {msg}")
+            device_name = self.device_manager.current_state.device_name
+        success, message = AudioController.fix_handsfree_audio(device_name)
+        self.btn_audio_fix.setText(
+            "✓ Качество зафиксировано" if success else f"Инфо: {message}"
+        )
 
-    def toggle_at_position(self, pos: QPoint):
-        """Shows or hides the flyout positioned neatly near tray icon."""
+    # ------------------------------------------------------------------
+    # Window placement
+    # ------------------------------------------------------------------
+    def open_at(self, pos: QPoint) -> None:
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            geom = screen.availableGeometry()
+            x = min(pos.x() - self.width() // 2, geom.right() - self.width() - 12)
+            x = max(12, x)
+            y = geom.bottom() - self.height() - 12
+            self.move(x, y)
+
+        self._closing = False
+        self.setWindowOpacity(0.0)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.fade_in(150)
+
+    def toggle_at_position(self, pos: QPoint) -> None:
         if self.isVisible():
             self.hide()
         else:
-            screen = QApplication.primaryScreen()
-            if screen:
-                geom = screen.availableGeometry()
-                x = min(pos.x() - self.width() // 2, geom.right() - self.width() - 12)
-                x = max(12, x)
-                # Position above taskbar
-                y = geom.bottom() - self.height() - 12
-                self.move(x, y)
-            self.show()
-            self.activateWindow()
+            self.open_at(pos)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.ActivationChange:
+            if self.isVisible() and not self._closing and not self.isActiveWindow():
+                self.hide()

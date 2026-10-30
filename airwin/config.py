@@ -15,7 +15,7 @@ class AppConfig:
     tray_show_percentage: bool = True
     low_latency_audio_fix: bool = True
     launch_on_startup: bool = False
-    dark_mode: bool = True
+    dark_mode: bool = False
     preferred_device_mac: str = ""
     demo_mode: bool = False
 
