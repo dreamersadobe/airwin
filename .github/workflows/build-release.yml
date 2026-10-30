@@ -30,11 +30,11 @@ jobs:
 
       - name: Build Standalone AirWin.exe (Single File)
         run: |
-          pyinstaller --noconfirm --clean --windowed --onefile --name AirWin --add-data "airwin;airwin" airwin/main.py
+          pyinstaller --noconfirm --clean --windowed --onefile --name AirWin --add-data "airwin;airwin" --collect-all bleak --collect-all winrt airwin/main.py
 
       - name: Build AirWin Folder Distribution
         run: |
-          pyinstaller --noconfirm --clean --windowed --onedir --name AirWin-Folder --add-data "airwin;airwin" airwin/main.py
+          pyinstaller --noconfirm --clean --windowed --onedir --name AirWin-Folder --add-data "airwin;airwin" --collect-all bleak --collect-all winrt airwin/main.py
           Compress-Archive -Path dist/AirWin-Folder/* -DestinationPath dist/AirWin-Windows-x64.zip
 
       - name: Create GitHub Release and Upload Exe
@@ -55,12 +55,13 @@ jobs:
             * **`AirWin-Windows-x64.zip`** — полная папка программы в архиве.
             
             #### ✨ Возможности:
-            * 🔋 Раздельный мониторинг заряда (L/R/Case) прямо из Bluetooth Low Energy маяков Apple.
+            * 🔋 Раздельный мониторинг заряда (L/R/Case) прямо из Bluetooth Low Energy маяков Apple (TLV-пакеты).
             * 🎧 Анимированное всплывающее окно при открытии кейса.
             * 🎛️ Центр управления в стиле macOS Sonoma / Big Sur из системного трея.
             * 🔇 Переключение режимов шумоподавления (ANC / Прозрачность / Выкл).
             * 👂 Автопауза при извлечении наушника из уха.
             * 🎵 Автоматический фикс качества звука Windows (Hands-Free fix).
+            * ⚡ Интеграция с сопряженными наушниками Windows в реальном времени.
           files: |
             dist/AirWin.exe
             dist/AirWin-Windows-x64.zip

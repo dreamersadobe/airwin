@@ -20,6 +20,8 @@ def build():
         "--onefile",
         "--name=AirWin",
         f"--add-data=airwin{sep}airwin",
+        "--collect-all=bleak",
+        "--collect-all=winrt",
         "airwin/main.py",
     ]
     print(f"Running command: {' '.join(cmd_onefile)}")
